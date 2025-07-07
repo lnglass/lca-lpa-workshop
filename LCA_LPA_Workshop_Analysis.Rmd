@@ -1,0 +1,102 @@
+
+---
+title: "LCA and LPA Workshop Analysis"
+author: "Leah Glassow & Kajsa Yang Hansen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Packages
+
+```{r}
+library(tidyverse)
+library(rmarkdown)
+library(janitor)
+library(dplyr)
+library(poLCA)
+library(tidyLPA)
+library(haven)
+library(tibble)
+library(ggplot2)
+library(purrr)
+library(nnet)
+library(tidyr)
+```
+
+## Load and Clean Data
+
+```{r}
+data <- read_sav("ugu2004_wellbeing_leisure_grade.sav") %>%
+  clean_names()
+```
+
+## Define Variables and Check Missingness
+
+```{r}
+lca_vars <- c("lmusic", "tvmytb", "games", "sports", "read", "acting", "friends", "computer")
+data %>%
+  dplyr::select(all_of(lca_vars)) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  print()
+```
+
+## Prepare Data and Fit LCA Models
+
+```{r}
+data_lca <- data %>%
+  dplyr::select(all_of(lca_vars)) %>%
+  drop_na()
+f <- cbind(lmusic, tvmytb, games, sports, read, acting, friends, computer) ~ 1
+
+set.seed(123)
+model_2 <- poLCA(f, data_lca, nclass = 2, maxiter = 5000, graphs = FALSE)
+model_3 <- poLCA(f, data_lca, nclass = 3, maxiter = 5000, graphs = FALSE)
+model_4 <- poLCA(f, data_lca, nclass = 4, maxiter = 5000, graphs = FALSE)
+
+fit_stats <- tibble(
+  Classes = c(2, 3, 4),
+  LogLikelihood = c(model_2$llik, model_3$llik, model_4$llik),
+  BIC = c(model_2$bic, model_3$bic, model_4$bic),
+  AIC = c(model_2$aic, model_3$aic, model_4$aic)
+)
+print(fit_stats)
+```
+
+## Profile Extraction and Visualization
+
+```{r}
+extract_profile <- function(model, class_label) {
+  bind_rows(lapply(names(model$probs), function(varname) {
+    p <- model$probs[[varname]]
+    n_classes <- nrow(p)
+    map_dfr(1:n_classes, function(k) {
+      response_vals <- as.numeric(gsub("Pr\((\d+)\)", "\1", colnames(p)))
+      mean_score <- sum(response_vals * p[k, ])
+      tibble(variable = varname,
+             class = paste0(class_label, ": Class ", k),
+             mean_score = mean_score)
+    })
+  }))
+}
+
+profiles <- bind_rows(
+  extract_profile(model_2, "2-Class"),
+  extract_profile(model_3, "3-Class"),
+  extract_profile(model_4, "4-Class")
+) %>%
+  mutate(model = sub(":.*", "", class))
+
+ggplot(profiles, aes(x = variable, y = mean_score, group = class, color = class)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~model, ncol = 1) +
+  theme_minimal() +
+  labs(title = "Latent Class Profiles (Split by Model)",
+       y = "Estimated Mean Response",
+       x = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
